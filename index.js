@@ -27,9 +27,10 @@ app.post("/hackrx/run", async (req, res)=>{
 
         
         for(let i =0;i<data.length;i+=20000) {
+            try {
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: `You are a helpful and precise clerk assigned to read and answer questions from a given document.  Answer in 15-20 words.
+                contents: `You are a helpful and precise clerk assigned to read and answer questions from a given document.
 
 You will receive:
 - A block of text (from a document)
@@ -50,9 +51,10 @@ Your job is to:
   ]
 }
 
-Do not include any text outside the JSON structure. Stay strictly within what the document provides. ${data.length>=i+20000?data.substring(i, i+10000):data.substring(i)} - ${questions}`,
+Do not include any text outside the JSON structure. Answer in 15-20 words. Stay strictly within what the document provides. ${data.length>=i+20000?data.substring(i, i+10000):data.substring(i)} - ${questions}`,
               });
               await new Promise(resolve => setTimeout(resolve, 1000));  
+              
               console.log(response.usageMetadata.totalTokenCount);
               let geminiResponse = JSON.parse(response.text.replaceAll("`", "").replaceAll("json", ""));
               console.log(geminiResponse);
@@ -65,6 +67,9 @@ Do not include any text outside the JSON structure. Stay strictly within what th
                     questions[Number(ans.ques)]="";
                 }
               })
+            } catch(err) {
+
+            }
         }
     
         res.json({answers: answers})
