@@ -45,13 +45,13 @@ Your job is to:
 
 {
   "answers": [
-    { "ques": "1", "ans": "answer to question 1" },
-    { "ques": "2", "ans": "answer to question 2" },
+    { "ques": 1, "ans": "answer to question 1" },
+    { "ques": 2, "ans": "answer to question 2" },
     ...
   ]
 }
 
-Do not include any text outside the JSON structure. Answer in 15-20 words. Stay strictly within what the document provides. ${data.length>=i+20000?data.substring(i, i+10000):data.substring(i)} - ${questions}`,
+Do not include any text outside the JSON structure. Answer in 15-20 words, if the question is an empty string return an empty string. Stay strictly within what the document provides. ${data.length>=i+20000?data.substring(i, i+10000):data.substring(i)} - ${questions}`,
               });
               await new Promise(resolve => setTimeout(resolve, 1000));  
               
@@ -65,6 +65,8 @@ Do not include any text outside the JSON structure. Answer in 15-20 words. Stay 
                     console.log(ans);
                     
                     questions[Number(ans.ques)]="";
+                    console.log(questions);
+                    
                 }
               })
             } catch(err) {
