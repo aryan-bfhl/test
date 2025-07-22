@@ -29,7 +29,7 @@ app.post("/hackrx/run", async (req, res)=>{
         for(let i =0;i<data.length;i+=20000) {
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
-                contents: `You are a helpful and precise clerk assigned to read and answer questions from a given document.
+                contents: `You are a helpful and precise clerk assigned to read and answer questions from a given document.  Answer in 15-20 words.
 
 You will receive:
 - A block of text (from a document)
