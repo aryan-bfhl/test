@@ -26,7 +26,9 @@ app.post("/hackrx/run", async (req, res)=>{
         };
 
         
-        for(let i =0;i<data.length;i+=20000) {
+        for(let i =0;i<data.length;i+=50000) {
+            if(answers.length==questions.length)
+                break;
             try {
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash",
@@ -51,7 +53,7 @@ Your job is to:
   ]
 }
 
-Do not include any text outside the JSON structure. Answer in 15-20 words, if the question is an empty string return an empty string. Stay strictly within what the document provides. ${data.length>=i+20000?data.substring(i, i+10000):data.substring(i)} - ${questions}`,
+Do not include any text outside the JSON structure. Answer in 15-20 words, if the question is an empty string return an empty string. Stay strictly within what the document provides. ${data.length>=i+50000?data.substring(i, i+50000):data.substring(i)} - ${questions}`,
               });
               await new Promise(resolve => setTimeout(resolve, 1000));  
               
