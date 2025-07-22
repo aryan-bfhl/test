@@ -53,9 +53,9 @@ Your job is to:
   ]
 }
 
-Do not include any text outside the JSON structure. Answer in 15-20 words, if the question is an empty string return an empty string. Stay strictly within what the document provides. ${data.length>=i+50000?data.substring(i, i+50000):data.substring(i)} - ${questions}`,
+Do not include any text outside the JSON structure. if the question is an empty string return an empty string. Stay strictly within what the document provides. ${data.length>=i+50000?data.substring(i, i+50000):data.substring(i)} - ${questions}`,
               });
-              await new Promise(resolve => setTimeout(resolve, 1000));  
+              await new Promise(resolve => setTimeout(resolve, 150));  
               
               console.log(response.usageMetadata.totalTokenCount);
               let geminiResponse = JSON.parse(response.text.replaceAll("`", "").replaceAll("json", ""));
