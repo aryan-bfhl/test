@@ -9,8 +9,7 @@ const openai = axios.create({
   headers: {
     "Content-Type": "application/json",
     "Authorization": `Bearer ${process.env.OPEN_AI_KEY}`,
-  },
-  timeout: 30000, // 30s
+  }
 });
 
 app.use(express.json());
