@@ -1,23 +1,41 @@
 const express = require("express");
-const app = express();
 const axios = require("axios");
-const cosine = require("fast-cosine-similarity");
+const stringSimilarity = require("string-similarity");
 const { readPdfFromUrl } = require("./util");
 require("dotenv").config();
 
+const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ─── OpenAI client ─────────────────────────────────────────────────────────
 const openai = axios.create({
   baseURL: "https://dev-api.healthrx.co.in/sp-gw/api/openai/v1",
   headers: {
     "Content-Type": "application/json",
-    "Authorization": `Bearer ${process.env.OPEN_AI_KEY}`,
+    Authorization: `Bearer ${process.env.OPEN_AI_KEY}`,
   },
-  timeout: 60_000,
+  timeout: 60000,
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// ─── In‑memory cache for chunk embeddings per document URL ────────────────
+const embedCache = new Map();
 
-const stringSimilarity = require("string-similarity");
+/**
+ * Embed text (with fallback to string-sim if embeddings fail)
+ */
+async function getEmbeddings(texts) {
+  try {
+    const resp = await openai.post("/embeddings", {
+      model: "gpt-4o",
+      input: texts,
+    });
+    return resp.data.data.map((d) => d.embedding);
+  } catch {
+    // fallback: return empty arrays; we'll use string-similarity later
+    return texts.map(() => null);
+  }
+}
 
 app.post("/hackrx/run", async (req, res) => {
   const { documents, questions } = req.body;
@@ -26,89 +44,104 @@ app.post("/hackrx/run", async (req, res) => {
   }
 
   try {
-    // 1) Get the full text
+    // 1) Load PDF text once
     const fullText = (await readPdfFromUrl(documents)).text;
 
-    // 2) Split into fixed-size chunks
+    // 2) Chunk the document
     const CHUNK_SIZE = 20_000;
     const chunks = [];
     for (let i = 0; i < fullText.length; i += CHUNK_SIZE) {
       chunks.push(fullText.slice(i, i + CHUNK_SIZE));
     }
 
-    // 3) For each question: pick top 3 similar chunks & ask once
-    const answers = await Promise.all(
+    // 3) Retrieve or compute chunk embeddings
+    let chunkEmbs = embedCache.get(documents);
+    if (!chunkEmbs) {
+      chunkEmbs = await getEmbeddings(chunks);
+      embedCache.set(documents, chunkEmbs);
+    }
+
+    // 4) For each question, pick top‑3 contexts
+    const items = await Promise.all(
       questions.map(async (q, idx) => {
-        if (!q.trim()) return "";
+        const question = q.trim();
+        if (!question) return { ques: idx, context: "", question };
 
-        // score each chunk on the question
-        const scores = chunks.map((txt, i) => ({
-          idx: i,
-          score: stringSimilarity.compareTwoStrings(q, txt),
-          text: txt,
-        }));
-        // pick top 3
-        scores.sort((a, b) => b.score - a.score);
-        const context = scores.slice(0, 3).map((c) => c.text).join("\n\n---\n\n");
-
-        // build prompt
-        const messages = [
-          {
-            role: "system",
-            content: [
-              "You are a precise document QA assistant.",
-              "Given a document excerpt and a question, respond ONLY with valid JSON:",
-              `{"ans":"<string>"}`,
-              "- If you cannot find the answer in the excerpt, return exactly \"Not available in document.\"",
-              "No code fences or extra text.",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              excerpt: context,
-              question: q,
-            }),
-          },
-        ];
-
-        // single ChatCompletion call
-        let resp;
+        // Try embedding question
+        let qEmb;
         try {
-          resp = await openai.post("/chat/completions", {
-            model: "gpt-4o",
-            messages,
-            temperature: 0,
-            max_tokens: 500,
-          });
-        } catch (err) {
-          console.error("ChatCompletion error for Q#", idx, err.response?.data || err.message);
-          return "";
-        }
-
-        // extract the JSON
-        let out = resp.data.choices[0].message.content.trim();
-        const b1 = out.indexOf("{");
-        const b2 = out.lastIndexOf("}");
-        if (b1 === -1 || b2 === -1) return "";
-        out = out.slice(b1, b2 + 1);
-
-        try {
-          const obj = JSON.parse(out);
-          return obj.ans || "";
+          const [e] = await getEmbeddings([question]);
+          qEmb = e;
         } catch {
-          return "";
+          qEmb = null;
         }
+
+        // Score chunks
+        const scored = chunks.map((txt, i) => {
+          let score = 0;
+          if (qEmb && chunkEmbs[i]) {
+            // cosine similarity
+            const dot = qEmb.reduce((sum, v, j) => sum + v * chunkEmbs[i][j], 0);
+            const magA = Math.sqrt(qEmb.reduce((s, v) => s + v * v, 0));
+            const magB = Math.sqrt(chunkEmbs[i].reduce((s, v) => s + v * v, 0));
+            score = dot / (magA * magB);
+          } else {
+            // fallback to string-similarity
+            score = stringSimilarity.compareTwoStrings(question, txt);
+          }
+          return { idx: i, score, text: txt };
+        });
+
+        scored.sort((a, b) => b.score - a.score);
+        const top3 = scored.slice(0, 3).map((c) => c.text).join("\n\n---\n\n");
+
+        return { ques: idx, question, context: top3 };
       })
     );
 
+    // 5) Single ChatCompletion for *all* questions
+    const systemPrompt = [
+      "You are a precise document QA assistant.",
+      "You will receive an array of {ques, question, context} objects.",
+      "For each, answer in JSON array form ONLY:",
+      `{"answers":[{"ques":<number>,"ans":"<string>"}]}`,
+      '- If answer is NOT in the context, ans must be exactly "Not available in document.".',
+      "No backticks or extra text.",
+    ].join(" ");
+
+    const userPayload = { items };
+
+    const chatResp = await openai.post("/chat/completions", {
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: JSON.stringify(userPayload) },
+      ],
+      temperature: 0,
+      max_tokens: 2000,
+    });
+
+    // 6) Extract JSON block
+    let raw = chatResp.data.choices[0].message.content.trim();
+    const start = raw.indexOf("{"), end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1) {
+      throw new Error("Model output missing JSON");
+    }
+    raw = raw.slice(start, end + 1);
+
+    const parsed = JSON.parse(raw);
+    // 7) Build answers array in question order
+    const answers = [];
+    for (const { ques, ans } of parsed.answers || []) {
+      answers[ques] = ans;
+    }
+
     return res.json({ answers });
   } catch (err) {
-    console.error("Fatal error:", err);
+    console.error("Error in /hackrx/run:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
-
 
 app.listen(3030, () => {
   console.log("Listening on port 3030");
